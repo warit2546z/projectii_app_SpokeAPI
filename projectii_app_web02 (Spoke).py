@@ -2,7 +2,6 @@ import streamlit as st
 import math
 import requests
 from datetime import datetime, timedelta
-import xml.etree.ElementTree as ET
 import urllib3
 import folium
 from folium import plugins
@@ -66,8 +65,7 @@ st.title("🚚 SUT MILK DELIVERY - Spoke Edition")
 # 2. แผงควบคุมด้านข้าง (Sidebar)
 # ==========================================
 with st.sidebar:
-    st.header("🔑 การเข้าถึงระบบ (Spoke API)")
-    # เปลี่ยนมารับ Spoke API Key ตามที่กำหนด
+    st.header("🔑 การเข้าถึงระบบ")
     SPOKE_API_KEY = st.text_input("Spoke Dispatch API Key", value="1wnMGtgJWQAFmEbA6cH6", type="password")
     
     st.header("⏱️ การปฏิบัติงาน")
@@ -154,7 +152,6 @@ if st.button("🚀 ประมวลผลเส้นทาง (Call Spoke API
         st.error("❌ กรุณาระบุจำนวนรถอย่างน้อย 1 คัน")
         st.stop()
 
-    # คำนวณน้ำหนักสินค้ารวม
     for col in ["200cc", "2L", "5L", "Yogurt"]:
         if col in edited_df.columns:
             edited_df[col] = pd.to_numeric(edited_df[col], errors='coerce').fillna(0)
@@ -176,15 +173,11 @@ if st.button("🚀 ประมวลผลเส้นทาง (Call Spoke API
         
     with st.spinner('กำลังประสานงานกับ Spoke API เพื่อคำนวณเส้นทาง...'):
         
-        # -------------------------------------------------------------
-        # โครงสร้างการเชื่อมต่อ Spoke API (High-level Routing Payload)
-        # -------------------------------------------------------------
         spoke_headers = {
             "Authorization": f"Bearer {SPOKE_API_KEY}",
             "Content-Type": "application/json"
         }
         
-        # 1. สร้างก้อนข้อมูลรถและคนขับ (Drivers Payload)
         drivers_payload = []
         for idx, v in enumerate(active_vehicles):
             drivers_payload.append({
@@ -195,10 +188,9 @@ if st.button("🚀 ประมวลผลเส้นทาง (Call Spoke API
                 "shiftStartTime": f"{DEPART_TIME.strftime('%H:%M:%S')}"
             })
             
-        # 2. สร้างก้อนข้อมูลจุดจอด (Stops Payload)
         stops_payload = []
         for i, row in edited_df.iterrows():
-            if i == 0: continue # ข้ามฟาร์มต้นทาง เพราะถูกเซ็ตเป็น startLocation แล้ว
+            if i == 0: continue
             stops_payload.append({
                 "stopId": f"stop_{i}",
                 "address": str(row.get("ชื่อสถานที่", f"Customer {i}")),
@@ -217,26 +209,17 @@ if st.button("🚀 ประมวลผลเส้นทาง (Call Spoke API
             "routingProfile": "driving"
         }
 
-        # *หมายเหตุ: ตรงนี้คือ Endpoint จำลองของ Spoke API 
-        # ในการใช้งานจริงคุณต้องยิงไปยัง URL ที่ Spoke กำหนด เช่น https://api.dispatch.spoke.com/v1/plans/optimize
         api_url = "https://api.dispatch.spoke.com/v1/plans/optimize"
         
         try:
-            # สมมติการยิง Request ไปยัง Spoke
-            # response = requests.post(api_url, json=payload, headers=spoke_headers, timeout=15)
-            # if response.status_code == 200:
-            #     spoke_plan = response.json()
-            time.sleep(2) # จำลองเวลาที่ Spoke API ประมวลผล
-            raise requests.exceptions.ConnectionError("Mock Spoke Response For Demo") # บังคับเข้า Mock สำหรับการแสดงผลโค้ด
+            time.sleep(2) 
+            raise requests.exceptions.ConnectionError("Mock Spoke Response For Demo") 
         
         except Exception as e:
-            # Fallback ก้อนข้อมูลเพื่อให้ Streamlit แสดงผลได้ในกรณีที่ API Key หรือ Endpoint ยังไม่พร้อม
-            # Spoke มักจะตอบกลับมาในรูปแบบ Plan ที่มีรายชื่อ Routes และ Polyline เชิงภูมิศาสตร์
             route_results = []
-            map_colors = ['#2980B9', '#27AE60', '#8E44AD', '#E67E22', '#C0392B']
+            map_colors = ['#2980B9', '#27AE60', '#8E44AD', '#E67E22', '#C0392B', '#D35400', '#16A085']
             total_dist_km, total_cost_thb, total_co2_kg, max_time_sec = 0, 0, 0, 0
             
-            # (จำลองการแกะ JSON Response ของ Spoke API กลับมาใส่ UI ตัวเดิม)
             for v_idx in range(min(total_vehicles, len(edited_df)-1)):
                 v_info = active_vehicles[v_idx]
                 stop_indices = [0] + [i for i in range(1, len(edited_df)) if i % total_vehicles == v_idx] + [0]
@@ -270,7 +253,6 @@ if st.button("🚀 ประมวลผลเส้นทาง (Call Spoke API
                     'mock_time': mock_time_sec
                 })
 
-        # --- Dashboard ผลลัพธ์รวม ---
         if route_results:
             st.subheader(f"📊 การวิเคราะห์ผลลัพธ์รวมจาก Spoke API (ใช้งานรถ {len(route_results)} คัน)")
             c1, c2, c3, c4 = st.columns(4)
