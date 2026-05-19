@@ -225,9 +225,28 @@ if st.button("🚀 ประมวลผลเส้นทาง (Call Spoke API
                 stop_indices = [0] + [i for i in range(1, len(edited_df)) if i % total_vehicles == v_idx] + [0]
                 loaded_weight = sum([demands[i] for i in stop_indices])
                 
+                # -----------------------------------------
+                # ✨ แก้ไขให้เส้นโค้งตามถนน (ใช้ OSRM API ฟรี)
+                # -----------------------------------------
                 chunk_polyline_coords = []
-                for n in stop_indices:
-                    chunk_polyline_coords.append((edited_df.iloc[n]['Lat'], edited_df.iloc[n]['Lon']))
+                try:
+                    # สร้าง string พิกัดสำหรับ OSRM (รูปแบบ ต้องเป็น lon,lat คั่นด้วย ;)
+                    coords_str = ";".join([f"{edited_df.iloc[n]['Lon']},{edited_df.iloc[n]['Lat']}" for n in stop_indices])
+                    osrm_url = f"http://router.project-osrm.org/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
+                    
+                    # ยิงไปขอเส้นทางถนนจริง
+                    osrm_res = requests.get(osrm_url, timeout=10).json()
+                    
+                    if osrm_res.get('code') == 'Ok':
+                        # OSRM คืนค่ามาเป็น [lon, lat] แต่ Folium ต้องการ [lat, lon] เลยต้องสลับตำแหน่ง
+                        road_geometry = osrm_res['routes'][0]['geometry']['coordinates']
+                        chunk_polyline_coords = [(lat, lon) for lon, lat in road_geometry]
+                    else:
+                        raise Exception("OSRM Failed")
+                except:
+                    # Fallback: ถ้า API ของ OSRM ล่ม ให้กลับไปวาดเส้นตรงเหมือนเดิม
+                    for n in stop_indices:
+                        chunk_polyline_coords.append((edited_df.iloc[n]['Lat'], edited_df.iloc[n]['Lon']))
                 
                 mock_dist_km = len(stop_indices) * 5.5
                 mock_time_sec = len(stop_indices) * 900
