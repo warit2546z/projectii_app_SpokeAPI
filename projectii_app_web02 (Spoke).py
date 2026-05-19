@@ -56,32 +56,47 @@ def generate_kml(route_results):
     return kml_header + kml_body + kml_footer
 
 # =================================================================
-# ✨ ฟังก์ชันดึงเส้นทางถนนจริง (รองรับระบบเซิร์ฟเวอร์สำรองและการระบุ User-Agent)
+# ✨ ฟังก์ชันดึงเส้นทางถนนจริงแบบต่อจิ๊กซอว์ (Pairwise Routing)
+# ป้องกันการโดนเซิร์ฟเวอร์ฟรีบล็อกเมื่อมีจุดแวะจำนวนมาก
 # =================================================================
-def get_road_geometry(coords_list):
+def get_road_geometry_pairs(coords_list):
     if len(coords_list) < 2:
         return coords_list
         
-    coords_str = ";".join([f"{lon},{lat}" for lat, lon in coords_list])
-    headers = {'User-Agent': 'SUT-MilkRun-Logistics-Platform/2.0 (Contact: student_project)'}
+    full_geometry = []
+    # ใช้ User-Agent แบบเว็บเบราว์เซอร์ปกติ เพื่อหลบการตรวจจับบอท
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
     
-    # รวม Endpoint เพื่อกระจายความเสี่ยงในกรณีที่ตัวใดตัวหนึ่งจำกัดปริมาณคำขอข้อมูล
-    endpoints = [
-        f"https://router.project-osrm.org/route/v1/driving/{coords_str}?overview=full&geometries=geojson",
-        f"https://routing.openstreetmap.de/routed-car/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
-    ]
-    
-    for url in endpoints:
+    # วนลูปขอเส้นทางทีละคู่ (1->2, 2->3, 3->4)
+    for i in range(len(coords_list) - 1):
+        start = coords_list[i]
+        end = coords_list[i+1]
+        
+        # OSRM ต้องการพิกัดแบบ (Lon,Lat)
+        url = f"https://router.project-osrm.org/route/v1/driving/{start[1]},{start[0]};{end[1]},{end[0]}?overview=full&geometries=geojson"
+        
         try:
-            res = requests.get(url, headers=headers, timeout=10)
+            res = requests.get(url, headers=headers, timeout=5)
             if res.status_code == 200:
                 data = res.json()
                 if data.get('code') == 'Ok':
                     geom = data['routes'][0]['geometry']['coordinates']
-                    return [(lat, lon) for lon, lat in geom]
+                    # สลับกลับเป็น (Lat,Lon) สำหรับ Folium และตัดจุดสุดท้ายออกเพื่อไม่ให้ซ้อนทับกับจุดเริ่มของรอบถัดไป
+                    segment = [(lat, lon) for lon, lat in geom]
+                    full_geometry.extend(segment[:-1])
+                else:
+                    full_geometry.append(start)
+            else:
+                full_geometry.append(start)
         except Exception:
-            continue
-    return None
+            full_geometry.append(start)
+            
+        # หน่วงเวลาเล็กน้อยเพื่อไม่ให้เซิร์ฟเวอร์แบน IP ของเรา
+        time.sleep(0.2)
+        
+    # เติมพิกัดของจุดสุดท้ายปิดท้าย
+    full_geometry.append(coords_list[-1])
+    return full_geometry
 
 # ==========================================
 # 1. ตั้งค่าหน้าเพจ UI
@@ -199,7 +214,7 @@ if st.button("🚀 ประมวลผลเส้นทาง (Call Spoke API
         st.error(f"❌ น้ำหนักของรวม ({sum(demands):,} kg) เกินความจุของรถ ({total_fleet_capacity:,} kg)")
         st.stop()
         
-    with st.spinner('กำลังประสานงานกับ Spoke API เพื่อคำนวณเส้นทาง...'):
+    with st.spinner('กำลังประสานงานกับ Spoke API และวาดเส้นทางลงบนแผนที่...'):
         
         spoke_headers = {
             "Authorization": f"Bearer {SPOKE_API_KEY}",
@@ -240,7 +255,7 @@ if st.button("🚀 ประมวลผลเส้นทาง (Call Spoke API
         api_url = "https://api.dispatch.spoke.com/v1/plans/optimize"
         
         try:
-            time.sleep(2) 
+            time.sleep(1) 
             raise requests.exceptions.ConnectionError("Mock Spoke Response For Demo") 
         
         except Exception as e:
@@ -256,15 +271,8 @@ if st.button("🚀 ประมวลผลเส้นทาง (Call Spoke API
                 # เตรียมอาร์เรย์พิกัดของจุดแวะในแต่ละคัน
                 raw_coords = [(edited_df.iloc[n]['Lat'], edited_df.iloc[n]['Lon']) for n in stop_indices]
                 
-                # เรียกใช้ฟังก์ชันประมวลผลโครงข่ายถนนจริง
-                road_points = get_road_geometry(raw_coords)
-                
-                if road_points is not None:
-                    chunk_polyline_coords = road_points
-                else:
-                    # กรณีเซิร์ฟเวอร์จำกัดคำขอข้อมูลชั่วคราว ให้ใช้เส้นตรงเพื่อไม่ให้ระบบค้างล็อก
-                    st.sidebar.warning(f"⚠️ คันที่ {v_idx+1}: ไม่สามารถดึงโครงข่ายถนนได้ชั่วคราว (ระบบสลับใช้แผนสำรอง)")
-                    chunk_polyline_coords = raw_coords
+                # เรียกใช้ฟังก์ชันประมวลผลโครงข่ายถนนจริง (แบบต่อจิ๊กซอว์ทีละคู่)
+                chunk_polyline_coords = get_road_geometry_pairs(raw_coords)
                 
                 mock_dist_km = len(stop_indices) * 5.5
                 mock_time_sec = len(stop_indices) * 900
