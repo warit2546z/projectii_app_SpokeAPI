@@ -10,7 +10,7 @@ import pandas as pd
 import io
 import time
 
-# 🔒 ปิดการแจ้งเตือนความปลอดภัย
+# 🔒 ปิดการแจ้งเตือนความปลอดภัยเพื่อเจาะทะลุ SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==========================================
@@ -54,6 +54,34 @@ def generate_kml(route_results):
             kml_body += f'          {lon},{lat},0\n'
         kml_body += '        </coordinates>\n      </LineString>\n    </Placemark>\n'
     return kml_header + kml_body + kml_footer
+
+# =================================================================
+# ✨ ฟังก์ชันดึงเส้นทางถนนจริง (รองรับระบบเซิร์ฟเวอร์สำรองและการระบุ User-Agent)
+# =================================================================
+def get_road_geometry(coords_list):
+    if len(coords_list) < 2:
+        return coords_list
+        
+    coords_str = ";".join([f"{lon},{lat}" for lat, lon in coords_list])
+    headers = {'User-Agent': 'SUT-MilkRun-Logistics-Platform/2.0 (Contact: student_project)'}
+    
+    # รวม Endpoint เพื่อกระจายความเสี่ยงในกรณีที่ตัวใดตัวหนึ่งจำกัดปริมาณคำขอข้อมูล
+    endpoints = [
+        f"https://router.project-osrm.org/route/v1/driving/{coords_str}?overview=full&geometries=geojson",
+        f"https://routing.openstreetmap.de/routed-car/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
+    ]
+    
+    for url in endpoints:
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get('code') == 'Ok':
+                    geom = data['routes'][0]['geometry']['coordinates']
+                    return [(lat, lon) for lon, lat in geom]
+        except Exception:
+            continue
+    return None
 
 # ==========================================
 # 1. ตั้งค่าหน้าเพจ UI
@@ -225,28 +253,18 @@ if st.button("🚀 ประมวลผลเส้นทาง (Call Spoke API
                 stop_indices = [0] + [i for i in range(1, len(edited_df)) if i % total_vehicles == v_idx] + [0]
                 loaded_weight = sum([demands[i] for i in stop_indices])
                 
-                # -----------------------------------------
-                # ✨ แก้ไขให้เส้นโค้งตามถนน (ใช้ OSRM API ฟรี)
-                # -----------------------------------------
-                chunk_polyline_coords = []
-                try:
-                    # สร้าง string พิกัดสำหรับ OSRM (รูปแบบ ต้องเป็น lon,lat คั่นด้วย ;)
-                    coords_str = ";".join([f"{edited_df.iloc[n]['Lon']},{edited_df.iloc[n]['Lat']}" for n in stop_indices])
-                    osrm_url = f"http://router.project-osrm.org/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
-                    
-                    # ยิงไปขอเส้นทางถนนจริง
-                    osrm_res = requests.get(osrm_url, timeout=10).json()
-                    
-                    if osrm_res.get('code') == 'Ok':
-                        # OSRM คืนค่ามาเป็น [lon, lat] แต่ Folium ต้องการ [lat, lon] เลยต้องสลับตำแหน่ง
-                        road_geometry = osrm_res['routes'][0]['geometry']['coordinates']
-                        chunk_polyline_coords = [(lat, lon) for lon, lat in road_geometry]
-                    else:
-                        raise Exception("OSRM Failed")
-                except:
-                    # Fallback: ถ้า API ของ OSRM ล่ม ให้กลับไปวาดเส้นตรงเหมือนเดิม
-                    for n in stop_indices:
-                        chunk_polyline_coords.append((edited_df.iloc[n]['Lat'], edited_df.iloc[n]['Lon']))
+                # เตรียมอาร์เรย์พิกัดของจุดแวะในแต่ละคัน
+                raw_coords = [(edited_df.iloc[n]['Lat'], edited_df.iloc[n]['Lon']) for n in stop_indices]
+                
+                # เรียกใช้ฟังก์ชันประมวลผลโครงข่ายถนนจริง
+                road_points = get_road_geometry(raw_coords)
+                
+                if road_points is not None:
+                    chunk_polyline_coords = road_points
+                else:
+                    # กรณีเซิร์ฟเวอร์จำกัดคำขอข้อมูลชั่วคราว ให้ใช้เส้นตรงเพื่อไม่ให้ระบบค้างล็อก
+                    st.sidebar.warning(f"⚠️ คันที่ {v_idx+1}: ไม่สามารถดึงโครงข่ายถนนได้ชั่วคราว (ระบบสลับใช้แผนสำรอง)")
+                    chunk_polyline_coords = raw_coords
                 
                 mock_dist_km = len(stop_indices) * 5.5
                 mock_time_sec = len(stop_indices) * 900
