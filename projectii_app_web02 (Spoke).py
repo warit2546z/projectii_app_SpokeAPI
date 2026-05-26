@@ -110,7 +110,26 @@ st.title("🚚 SUT MILK DELIVERY - Spoke Edition")
 with st.sidebar:
     st.header("🔑 การเข้าถึงระบบ")
     SPOKE_API_KEY = st.text_input("Spoke Dispatch API Key", value="1wnMGtgJWQAFmEbA6cH6", type="password")
+
+    st.markdown("---")
+    st.header("🧠 การตั้งค่าอัลกอริทึม (UI Display)")
     
+    first_solution = st.selectbox(
+        "1. อัลกอริทึมสร้างเส้นทางร่างแรก",
+        [
+            "AUTOMATIC (ค่าเริ่มต้น)", 
+            "SAVINGS (ประหยัดระยะทางทีละคัน)", 
+            "PARALLEL_SAVINGS (ประหยัดแบบขนาน)",
+            "PATH_CHEAPEST_ARC (เพื่อนบ้านใกล้สุด)",
+            "LOCAL_CHEAPEST_INSERTION (แทรกจุดที่ถูกที่สุด)",
+            "GLOBAL_CHEAPEST_ARC (เชื่อมจุดถูกสุด)"
+        ]
+    )
+    
+    st.markdown("**2. สมองกลปรับปรุงเส้นทาง**")
+    st.success("🧠 GUIDED_LOCAL_SEARCH (เปิดใช้งานถาวร)")
+    
+    st.markdown("---")
     st.header("⏱️ การปฏิบัติงาน")
     DEPART_TIME = st.time_input("เวลาเริ่มออกรถจากฟาร์ม", datetime.strptime("11:00", "%H:%M").time())
     SERVICE_TIME_SEC = st.number_input("เวลาลงนมเฉลี่ยต่อจุด (วินาที)", min_value=0, value=45, step=5)
